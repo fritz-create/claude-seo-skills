@@ -7,8 +7,11 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
 fi
 
 REPO_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
-SKILL_DIR="${HOME}/.claude/skills/seo"
-AGENT_DIR="${HOME}/.claude/agents"
+
+# Resolve home directory robustly (HOME may be unset in some web environments)
+REAL_HOME="${HOME:-$(eval echo ~)}"
+SKILL_DIR="${REAL_HOME}/.claude/skills/seo"
+AGENT_DIR="${REAL_HOME}/.claude/agents"
 
 echo "→ Installing Claude SEO skills globally..."
 
@@ -22,7 +25,7 @@ cp -r "${REPO_DIR}/seo/"* "${SKILL_DIR}/"
 # Install each sub-skill
 for skill_dir in "${REPO_DIR}/skills"/*/; do
   skill_name=$(basename "${skill_dir}")
-  target="${HOME}/.claude/skills/${skill_name}"
+  target="${REAL_HOME}/.claude/skills/${skill_name}"
   mkdir -p "${target}"
   cp -r "${skill_dir}"* "${target}/"
 done
@@ -66,3 +69,52 @@ else
 fi
 
 echo "✓ Claude SEO skills installed globally. Use /seo in any project."
+
+# ── Bootstrap global hook so skills auto-install in ALL future repos ──────────
+GLOBAL_HOOK_DIR="${REAL_HOME}/.claude/hooks"
+GLOBAL_HOOK="${GLOBAL_HOOK_DIR}/install-seo-skills.sh"
+GLOBAL_SETTINGS="${REAL_HOME}/.claude/settings.json"
+
+# Install the global hook script if not already present
+if [ ! -f "${GLOBAL_HOOK}" ]; then
+  mkdir -p "${GLOBAL_HOOK_DIR}"
+  cp "${REPO_DIR}/.claude/hooks/session-start.sh" "${GLOBAL_HOOK}"
+  chmod +x "${GLOBAL_HOOK}"
+fi
+
+# Register the global hook in ~/.claude/settings.json if not already present
+if [ -f "${GLOBAL_SETTINGS}" ]; then
+  if ! grep -q "install-seo-skills" "${GLOBAL_SETTINGS}" 2>/dev/null; then
+    # Add SessionStart entry using python3 (avoids jq dependency)
+    python3 - <<'PYEOF'
+import json, sys, os
+
+settings_path = os.path.expanduser(os.environ.get("GLOBAL_SETTINGS", "~/.claude/settings.json"))
+with open(settings_path) as f:
+    s = json.load(f)
+s.setdefault("hooks", {}).setdefault("SessionStart", [])
+hook_entry = {"hooks": [{"type": "command", "command": "~/.claude/hooks/install-seo-skills.sh"}]}
+if not any("install-seo-skills" in str(e) for e in s["hooks"]["SessionStart"]):
+    s["hooks"]["SessionStart"].append(hook_entry)
+with open(settings_path, "w") as f:
+    json.dump(s, f, indent=4)
+PYEOF
+  fi
+elif [ ! -f "${GLOBAL_SETTINGS}" ]; then
+  cat > "${GLOBAL_SETTINGS}" <<'JSON'
+{
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "~/.claude/hooks/install-seo-skills.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}
+JSON
+fi
